@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { extname } from "node:path";
+import { basename, extname } from "node:path";
 
 const MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",
@@ -13,13 +13,17 @@ const MIME_BY_EXT: Record<string, string> = {
   ".pdf": "application/pdf",
 };
 
-const DEFAULT_PROMPT =
+const DEFAULT_PROMPT_SINGLE =
   "Describe this image in detail. Call out any text, UI elements, error messages, " +
   "charts, and anything visually notable. Be precise and factual.";
 
+const DEFAULT_PROMPT_MULTI =
+  "Compare these images. Describe what each one shows, then call out the key " +
+  "similarities and differences between them. Be precise and factual.";
+
 export interface AnalyzeOptions {
-  /** Absolute path to a local image file, or an http(s) URL. */
-  image: string;
+  /** One image, or several to reason about together — each a local path or http(s) URL. */
+  image: string | string[];
   prompt?: string;
   model?: string;
   apiKey?: string;
@@ -28,6 +32,20 @@ export interface AnalyzeOptions {
 interface ImagePayload {
   mimeType: string;
   data: string; // base64
+}
+
+type Part = { text: string } | { inline_data: { mime_type: string; data: string } };
+
+/** A short human-readable label for an image, used to tag it in multi-image prompts. */
+function labelFor(image: string): string {
+  if (/^https?:\/\//i.test(image)) {
+    try {
+      return basename(new URL(image).pathname) || image;
+    } catch {
+      return image;
+    }
+  }
+  return basename(image);
 }
 
 async function loadImage(image: string): Promise<ImagePayload> {
@@ -52,14 +70,29 @@ async function loadImage(image: string): Promise<ImagePayload> {
   return { mimeType, data: buf.toString("base64") };
 }
 
-/** Send one image + prompt to Gemini and return the model's text answer. */
+/** Send one or more images + a prompt to Gemini and return the model's text answer. */
 export async function analyzeImage(opts: AnalyzeOptions): Promise<string> {
   const apiKey = opts.apiKey ?? process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set (env or .env)");
 
+  const images = (Array.isArray(opts.image) ? opts.image : [opts.image]).filter(
+    (s) => typeof s === "string" && s.trim() !== "",
+  );
+  if (images.length === 0) throw new Error("No image provided");
+
   const model = opts.model?.trim() || process.env.GEMINI_MODEL?.trim() || "gemini-flash-latest";
-  const prompt = opts.prompt?.trim() || DEFAULT_PROMPT;
-  const { mimeType, data } = await loadImage(opts.image);
+  const prompt =
+    opts.prompt?.trim() || (images.length > 1 ? DEFAULT_PROMPT_MULTI : DEFAULT_PROMPT_SINGLE);
+
+  const loaded = await Promise.all(images.map(loadImage));
+
+  // Prompt first, then each image. With more than one, prefix each with an
+  // "Image N" label so the prompt can refer to them unambiguously.
+  const parts: Part[] = [{ text: prompt }];
+  loaded.forEach((img, i) => {
+    if (loaded.length > 1) parts.push({ text: `Image ${i + 1} (${labelFor(images[i])}):` });
+    parts.push({ inline_data: { mime_type: img.mimeType, data: img.data } });
+  });
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   const res = await fetch(url, {
@@ -69,11 +102,7 @@ export async function analyzeImage(opts: AnalyzeOptions): Promise<string> {
       // Header form keeps the key out of the URL (and out of any request logs).
       "x-goog-api-key": apiKey,
     },
-    body: JSON.stringify({
-      contents: [
-        { parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data } }] },
-      ],
-    }),
+    body: JSON.stringify({ contents: [{ parts }] }),
   });
 
   if (!res.ok) {
@@ -82,9 +111,9 @@ export async function analyzeImage(opts: AnalyzeOptions): Promise<string> {
   }
 
   const json = (await res.json()) as any;
-  const parts = json?.candidates?.[0]?.content?.parts;
-  const text = Array.isArray(parts)
-    ? parts.map((p: any) => p?.text ?? "").join("").trim()
+  const responseParts = json?.candidates?.[0]?.content?.parts;
+  const text = Array.isArray(responseParts)
+    ? responseParts.map((p: any) => p?.text ?? "").join("").trim()
     : "";
 
   if (!text) {

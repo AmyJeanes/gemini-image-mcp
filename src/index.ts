@@ -18,19 +18,27 @@ const server = new McpServer({ name: "gemini-image-mcp", version: "0.1.0" });
 server.registerTool(
   "analyze_image",
   {
-    title: "Analyze image with Gemini",
+    title: "Analyze image(s) with Gemini",
     description:
-      "Analyze a local image file (or image URL) with Google's Gemini vision models and " +
-      "return a text answer. Use this to read screenshots, diagrams, charts, or UI states " +
-      "without loading raw image bytes into the calling agent's context.",
+      "Analyze one or more images with Google's Gemini vision models and return a text " +
+      "answer. Pass a single image to read a screenshot/diagram/chart, or several to " +
+      "compare them (e.g. before/after, spot-the-difference) — all without loading raw " +
+      "image bytes into the calling agent's context.",
     inputSchema: {
       image: z
-        .string()
-        .describe("Absolute path to a local image file, or an http(s) URL."),
+        .union([z.string(), z.array(z.string())])
+        .describe(
+          "Image(s) to analyze: a single local file path or http(s) URL, or an array of " +
+            "them to reason about together. With multiple, each is labelled Image 1, Image 2, " +
+            "… in order so your prompt can refer to them.",
+        ),
       prompt: z
         .string()
         .optional()
-        .describe("Question/instruction about the image. Defaults to a detailed description."),
+        .describe(
+          "Question/instruction. Defaults to a detailed description for one image, or a " +
+            "comparison for several.",
+        ),
       model: z
         .string()
         .optional()

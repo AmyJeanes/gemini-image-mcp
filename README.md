@@ -44,20 +44,26 @@ Code, then it can call `analyze_image` with an image path and an optional prompt
 
 ## Tool: `analyze_image`
 
-| Argument | Type   | Required | Description                                                        |
-| -------- | ------ | -------- | ------------------------------------------------------------------ |
-| `image`  | string | yes      | Absolute path to a local image file, or an `http(s)` URL.          |
-| `prompt` | string | no       | What to ask about the image. Defaults to a detailed description.   |
-| `model`  | string | no       | Per-call model override.                                           |
+| Argument | Type              | Required | Description                                                                                   |
+| -------- | ----------------- | -------- | --------------------------------------------------------------------------------------------- |
+| `image`  | string \| string[] | yes      | A single local file path or `http(s)` URL, or an array of them to compare/reason about together. |
+| `prompt` | string            | no       | What to ask. Defaults to a detailed description (one image) or a comparison (several).         |
+| `model`  | string            | no       | Per-call model override.                                                                       |
+
+Pass several images to compare them (before/after, spot-the-difference, "do these match"). Each is
+labelled `Image 1`, `Image 2`, … in order, so the prompt can refer to them. All images ride in a single
+Gemini request.
 
 Supported inputs: PNG, JPEG, WebP, GIF, BMP, HEIC/HEIF, and PDF.
 
 ## Smoke test
 
-Verify the key + API + image path end to end, without the MCP layer:
+Verify the key + API + image path end to end, without the MCP layer. The prompt comes
+first (pass `""` for the default), then one or more images:
 
 ```sh
-npm run smoke -- ./test/sample.png "What does this image say?"
+npm run smoke -- "What does this image say?" ./test/sample.png
+npm run smoke -- "What changed between these?" ./before.png ./after.png
 ```
 
 ## License
