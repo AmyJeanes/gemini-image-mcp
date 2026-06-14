@@ -1,0 +1,38 @@
+{
+  "name": "gemini-image-mcp",
+  "version": "0.1.0",
+  "description": "MCP server that analyzes images with Google Gemini vision models, so an agent can read screenshots/diagrams without loading raw image bytes into its main context.",
+  "type": "module",
+  "bin": {
+    "gemini-image-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "smoke": "tsx test/smoke.ts"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "gemini",
+    "vision",
+    "image-analysis"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.3",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
