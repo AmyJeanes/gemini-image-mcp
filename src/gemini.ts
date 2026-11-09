@@ -21,11 +21,23 @@ const DEFAULT_PROMPT_MULTI =
   "Compare these images. Describe what each one shows, then call out the key " +
   "similarities and differences between them. Be precise and factual.";
 
+export const THINKING_LEVELS = ["minimal", "low", "medium", "high"] as const;
+export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+
+export const MEDIA_RESOLUTIONS = ["low", "medium", "high"] as const;
+export type MediaResolution = (typeof MEDIA_RESOLUTIONS)[number];
+
 export interface AnalyzeOptions {
   /** One image, or several to reason about together — each a local path or http(s) URL. */
   image: string | string[];
   prompt?: string;
   model?: string;
+  /** Falls back to GEMINI_THINKING; unset leaves the model's default. */
+  thinking?: ThinkingLevel;
+  /** Falls back to GEMINI_MEDIA_RESOLUTION; unset leaves the model's default. */
+  mediaResolution?: MediaResolution;
+  /** Append a token-usage line. Falls back to GEMINI_REPORT_USAGE. */
+  reportUsage?: boolean;
   apiKey?: string;
 }
 
@@ -35,6 +47,20 @@ interface ImagePayload {
 }
 
 type Part = { text: string } | { inline_data: { mime_type: string; data: string } };
+
+/** Read an enum-valued env var, rejecting typos rather than silently ignoring them. */
+function envChoice<T extends string>(name: string, allowed: readonly T[]): T | undefined {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return undefined;
+  if (!(allowed as readonly string[]).includes(raw)) {
+    throw new Error(`${name}="${raw}" is not one of: ${allowed.join(", ")}`);
+  }
+  return raw as T;
+}
+
+function envFlag(name: string): boolean {
+  return /^(1|true|yes|on)$/i.test(process.env[name]?.trim() ?? "");
+}
 
 /** A short human-readable label for an image, used to tag it in multi-image prompts. */
 function labelFor(image: string): string {
@@ -84,6 +110,11 @@ export async function analyzeImage(opts: AnalyzeOptions): Promise<string> {
   const prompt =
     opts.prompt?.trim() || (images.length > 1 ? DEFAULT_PROMPT_MULTI : DEFAULT_PROMPT_SINGLE);
 
+  const thinking = opts.thinking ?? envChoice("GEMINI_THINKING", THINKING_LEVELS);
+  const mediaResolution =
+    opts.mediaResolution ?? envChoice("GEMINI_MEDIA_RESOLUTION", MEDIA_RESOLUTIONS);
+  const reportUsage = opts.reportUsage ?? envFlag("GEMINI_REPORT_USAGE");
+
   const loaded = await Promise.all(images.map(loadImage));
 
   // Prompt first, then each image. With more than one, prefix each with an
@@ -94,6 +125,15 @@ export async function analyzeImage(opts: AnalyzeOptions): Promise<string> {
     parts.push({ inline_data: { mime_type: img.mimeType, data: img.data } });
   });
 
+  // Only send what was asked for, so unset options keep the model's own defaults.
+  const generationConfig: Record<string, unknown> = {};
+  if (thinking) generationConfig.thinkingConfig = { thinkingLevel: thinking.toUpperCase() };
+  if (mediaResolution) {
+    generationConfig.mediaResolution = `MEDIA_RESOLUTION_${mediaResolution.toUpperCase()}`;
+  }
+  const body: Record<string, unknown> = { contents: [{ parts }] };
+  if (Object.keys(generationConfig).length > 0) body.generationConfig = generationConfig;
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
   const res = await fetch(url, {
     method: "POST",
@@ -102,7 +142,7 @@ export async function analyzeImage(opts: AnalyzeOptions): Promise<string> {
       // Header form keeps the key out of the URL (and out of any request logs).
       "x-goog-api-key": apiKey,
     },
-    body: JSON.stringify({ contents: [{ parts }] }),
+    body: JSON.stringify(body),
   });
 
   if (!res.ok) {
@@ -113,7 +153,11 @@ export async function analyzeImage(opts: AnalyzeOptions): Promise<string> {
   const json = (await res.json()) as any;
   const responseParts = json?.candidates?.[0]?.content?.parts;
   const text = Array.isArray(responseParts)
-    ? responseParts.map((p: any) => p?.text ?? "").join("").trim()
+    ? responseParts
+        .filter((p: any) => p?.thought !== true)
+        .map((p: any) => p?.text ?? "")
+        .join("")
+        .trim()
     : "";
 
   if (!text) {
@@ -122,5 +166,18 @@ export async function analyzeImage(opts: AnalyzeOptions): Promise<string> {
       `Empty Gemini response${finish ? ` (finishReason: ${finish})` : ""}: ${JSON.stringify(json).slice(0, 500)}`,
     );
   }
-  return text;
+  if (!reportUsage) return text;
+  return `${text}\n\n${usageLine(json, model)}`;
+}
+
+function usageLine(json: any, model: string): string {
+  const u = json?.usageMetadata ?? {};
+  const fields = [
+    `model=${json?.modelVersion ?? model}`,
+    `prompt=${u.promptTokenCount ?? "?"}`,
+    `thoughts=${u.thoughtsTokenCount ?? 0}`,
+    `output=${u.candidatesTokenCount ?? "?"}`,
+    `total=${u.totalTokenCount ?? "?"}`,
+  ];
+  return `[usage: ${fields.join(" ")}]`;
 }

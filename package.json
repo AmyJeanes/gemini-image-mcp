@@ -1,6 +1,6 @@
 {
   "name": "gemini-image-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server that analyzes images with Google Gemini vision models, so an agent can read screenshots/diagrams without loading raw image bytes into its main context.",
   "type": "module",
   "bin": {
